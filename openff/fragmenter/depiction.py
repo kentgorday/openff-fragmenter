@@ -1,192 +1,12 @@
 import base64
 import os
-from collections.abc import Collection
 
 from jinja2 import Template
 from openff.toolkit.topology import Molecule
-from openff.utilities import (
-    MissingOptionalDependencyError,
-    get_data_file_path,
-    requires_oe_module,
-)
+from openff.utilities import get_data_file_path
 
 from openff.fragmenter.fragment import BondTuple, FragmentationResult
 from openff.fragmenter.utils import get_map_index
-
-
-@requires_oe_module("oechem")
-def _oe_fragment_predicates(map_indices: Collection[int]):
-    """Returns an atom and bond predicate which matches atoms whose map index
-    appears in the specified ``map_indices`` collection"""
-
-    from openeye import oechem
-
-    class PredicateAtoms(oechem.OEUnaryAtomPred):
-        def __init__(self, inner_map_indices):
-            oechem.OEUnaryAtomPred.__init__(self)
-            self.map_indices = inner_map_indices
-
-        def __call__(self, atom):
-            return atom.GetMapIdx() in self.map_indices
-
-        def CreateCopy(self):
-            return PredicateAtoms(self.map_indices).__disown__()
-
-    class PredicateBonds(oechem.OEUnaryBondPred):
-        def __init__(self, inner_map_indices):
-            oechem.OEUnaryBondPred.__init__(self)
-            self.map_indices = inner_map_indices
-
-        def __call__(self, bond: oechem.OEBondBase):
-            return bond.GetBgn().GetMapIdx() in self.map_indices and bond.GetEnd().GetMapIdx() in self.map_indices
-
-        def CreateCopy(self):
-            return PredicateBonds(self.map_indices).__disown__()
-
-    return PredicateAtoms(map_indices), PredicateBonds(map_indices)
-
-
-@requires_oe_module("oedepict")
-def _oe_wbo_label_display(bond_tuples: Collection[BondTuple]):
-    """Returns a ``OEDisplayBondPropBase`` subclass which will label bonds with the
-    specified map indices with their WBO values if present.
-    """
-
-    from openeye import oedepict
-
-    class LabelWibergBondOrder(oedepict.OEDisplayBondPropBase):
-        def __init__(self, inner_bond_tuples):
-            oedepict.OEDisplayBondPropBase.__init__(self)
-            self.bond_tuples = inner_bond_tuples
-
-        def __call__(self, bond):
-            map_tuple = (bond.GetBgn().GetMapIdx(), bond.GetEnd().GetMapIdx())
-
-            if map_tuple not in self.bond_tuples and tuple(reversed(map_tuple)) not in self.bond_tuples:
-                return " "
-
-            if "fractional_bond_order" not in bond.GetData():
-                return " "
-
-            return f"{bond.GetData('fractional_bond_order'):.2f}"
-
-        def CreateCopy(self):
-            return LabelWibergBondOrder(self.bond_tuples).__disown__()
-
-    return LabelWibergBondOrder(bond_tuples)
-
-
-@requires_oe_module("oedepict")
-def _oe_render_parent(
-    parent: Molecule,
-    rotor_bonds: Collection[BondTuple] | None = None,
-    image_width: int = 572,
-    image_height: int = 198,
-) -> str:
-    from openeye import oedepict
-
-    rotor_bonds = [] if rotor_bonds is None else rotor_bonds
-
-    # Map the OpenFF molecules into OE ones, making sure to explicitly set the atom
-    # map on the OE object as this is not handled by the OpenFF toolkit.
-    oe_parent = parent.to_openeye()
-
-    for atom in oe_parent.GetAtoms():
-        atom.SetMapIdx(get_map_index(parent, atom.GetIdx(), False))
-
-    oedepict.OEPrepareDepiction(oe_parent)
-
-    # Set-up common display options.
-    image = oedepict.OEImage(image_width, image_height)
-
-    display_options = oedepict.OE2DMolDisplayOptions(image_width, image_height, oedepict.OEScale_AutoScale)
-    display_options.SetTitleLocation(oedepict.OETitleLocation_Hidden)
-    display_options.SetAtomColorStyle(oedepict.OEAtomColorStyle_WhiteMonochrome)
-    display_options.SetAtomLabelFontScale(1.2)
-    display_options.SetBondPropertyFunctor(_oe_wbo_label_display(rotor_bonds))
-
-    display = oedepict.OE2DMolDisplay(oe_parent, display_options)
-
-    oedepict.OERenderMolecule(image, display)
-
-    svg_contents = oedepict.OEWriteImageToString("svg", image)
-    return svg_contents.decode()
-
-
-@requires_oe_module("oedepict")
-@requires_oe_module("oechem")
-def _oe_render_fragment(
-    parent: Molecule,
-    fragment: Molecule,
-    bond_indices: BondTuple,
-    image_width: int = 283,
-    image_height: int = 169,
-) -> str:
-    from openeye import oechem, oedepict
-
-    # Map the OpenFF molecules into OE ones, making sure to explicitly set the atom
-    # map on the OE object as this is not handled by the OpenFF toolkit.
-    oe_parent = parent.to_openeye()
-
-    for atom in oe_parent.GetAtoms():
-        atom.SetMapIdx(get_map_index(parent, atom.GetIdx(), False))
-
-    oedepict.OEPrepareDepiction(oe_parent)
-
-    oe_fragment = fragment.to_openeye()
-
-    for atom in oe_fragment.GetAtoms():
-        atom.SetMapIdx(get_map_index(fragment, atom.GetIdx(), False))
-
-    oe_parent_bond = oe_parent.GetBond(
-        oe_parent.GetAtom(oechem.OEHasMapIdx(bond_indices[0])),
-        oe_parent.GetAtom(oechem.OEHasMapIdx(bond_indices[1])),
-    )
-
-    # Set-up common display options.
-    image = oedepict.OEImage(image_width, image_height)
-
-    display_options = oedepict.OE2DMolDisplayOptions(image_width, image_height, oedepict.OEScale_AutoScale)
-
-    display_options.SetTitleLocation(oedepict.OETitleLocation_Hidden)
-    display_options.SetAtomColorStyle(oedepict.OEAtomColorStyle_WhiteMonochrome)
-    display_options.SetAtomLabelFontScale(1.2)
-
-    # display_options.SetBondPropertyFunctor(_oe_wbo_label_display({bond_indices}))
-
-    display = oedepict.OE2DMolDisplay(oe_parent, display_options)
-
-    fragment_atom_predicate, fragment_bond_predicate = _oe_fragment_predicates(
-        {atom.GetMapIdx() for atom in oe_fragment.GetAtoms()}
-    )
-
-    not_fragment_atoms = oechem.OENotAtom(fragment_atom_predicate)
-    not_fragment_bonds = oechem.OENotBond(fragment_bond_predicate)
-
-    oedepict.OEAddHighlighting(
-        display,
-        oedepict.OEHighlightByColor(oechem.OEGrey, 0.75),
-        not_fragment_atoms,
-        not_fragment_bonds,
-    )
-
-    rotatable_bond = oechem.OEAtomBondSet()
-
-    rotatable_bond.AddBond(oe_parent_bond)
-    rotatable_bond.AddAtom(oe_parent_bond.GetBgn())
-    rotatable_bond.AddAtom(oe_parent_bond.GetEnd())
-
-    oedepict.OEAddHighlighting(
-        display,
-        oechem.OEColor(oechem.OELimeGreen),
-        oedepict.OEHighlightStyle_BallAndStick,
-        rotatable_bond,
-    )
-
-    oedepict.OERenderMolecule(image, display)
-
-    svg_contents = oedepict.OEWriteImageToString("svg", image)
-    return svg_contents.decode()
 
 
 def _rd_render_parent(
@@ -312,17 +132,8 @@ def depict_fragments(parent: Molecule, fragments: dict[BondTuple, Molecule], out
         The name of the file to write out to.
     """
 
-    try:
-        header_svg = _oe_render_parent(parent, [*fragments])
-        fragment_svg = [
-            _oe_render_fragment(parent, fragment, bond_tuple) for bond_tuple, fragment in fragments.items()
-        ]
-
-    except (ModuleNotFoundError, MissingOptionalDependencyError):
-        header_svg = _rd_render_parent(parent)
-        fragment_svg = [
-            _rd_render_fragment(parent, fragment, bond_tuple) for bond_tuple, fragment in fragments.items()
-        ]
+    header_svg = _rd_render_parent(parent)
+    fragment_svg = [_rd_render_fragment(parent, fragment, bond_tuple) for bond_tuple, fragment in fragments.items()]
 
     template_path = get_data_file_path(
         os.path.join("data", "report-template.html"),

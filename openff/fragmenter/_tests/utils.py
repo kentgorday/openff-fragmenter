@@ -1,20 +1,9 @@
-import importlib
 from collections import defaultdict
 
-import pytest
 from openff.toolkit.topology import Molecule
 
 from openff.fragmenter.fragment import BondTuple
 from openff.fragmenter.utils import get_map_index
-
-try:
-    importlib.import_module("openeye.oechem")
-
-    has_openeye = True
-except ImportError:
-    has_openeye = False
-
-using_openeye = pytest.mark.skipif(not has_openeye, reason="Cannot run without OpenEye")
 
 
 def smarts_set_to_map_indices(input_set: set[str], molecule: Molecule) -> set[int | BondTuple]:
@@ -25,7 +14,7 @@ def smarts_set_to_map_indices(input_set: set[str], molecule: Molecule) -> set[in
 
     The is useful for tests which need to define expected values for atoms / bonds
     with specific map indices in a way that is agnostic of how the molecule used in
-    the test is ordered (i.e. whether it was canonically ordered with RDKit or OE.
+    the test is ordered (i.e. whether it was canonically ordered.
     """
 
     return_value = set()
@@ -52,7 +41,7 @@ def key_smarts_to_map_indices[T](input_dictionary: dict[str, T], molecule: Molec
 
     The is useful for tests which need to define expected values for atoms / bonds
     with specific map indices in a way that is agnostic of how the molecule used in
-    the test is ordered (i.e. whether it was canonically ordered with RDKit or OE.
+    the test is ordered (i.e. whether it was canonically ordered.
     """
 
     return_value = {}
@@ -83,7 +72,7 @@ def value_smarts_to_map_indices(
 
     The is useful for tests which need to define expected values for atoms / bonds
     with specific map indices in a way that is agnostic of how the molecule used in
-    the test is ordered (i.e. whether it was canonically ordered with RDKit or OE.
+    the test is ordered (i.e. whether it was canonically ordered.
     """
 
     return_value = defaultdict(set)

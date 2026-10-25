@@ -16,8 +16,23 @@ More information about using this package and its features can be found in the [
 The package and its dependencies can be installed using the `mamba` package manager:
 
 ```shell
-mamba install -c conda-forge openff-fragmenter
+mamba install -c conda-forge openff-fragmenter "xtb>=6.7.1"
 ```
+
+The `WBOFragmenter` computes Wiberg bond orders (WBOs) with GFN2-xTB by running the
+[`xtb`](https://github.com/grimme-lab/xtb) program, which must be on your `PATH`. Conformers, stereochemistry
+and depictions are handled by the RDKit; neither AmberTools nor the OpenEye toolkits are used.
+
+WBOs are computed in the gas phase by default. To compute them in an ALPB implicit solvent instead, pass any
+solvent name that `xtb --alpb` accepts:
+
+```python
+from openff.fragmenter.fragment import WBOFragmenter, WBOOptions
+
+frag_engine = WBOFragmenter(wbo_options=WBOOptions(solvent="water"))
+```
+
+Note that the default WBO `threshold` (0.03) was tuned for AM1 WBOs and has not yet been re-tuned for GFN2-xTB.
 
 ## Getting Started
 

@@ -12,12 +12,15 @@ The recommended way to install ``openff-fragmenter`` is via the ``mamba`` packag
 
 If you do not have Conda installed, see the `OpenFF installation guide <openff.docs:install>`_.
 
-If you have access to the OpenEye toolkits (namely ``oechem``, ``oequacpac`` and ``oeomega``) we recommend installing
-these also as these can speed up fragmentation times significantly:
+The ``WBOFragmenter`` computes Wiberg bond orders with GFN2-xTB by calling the ``xtb`` program, which must be on
+your ``PATH``. It is available from conda-forge:
 
 .. code-block:: bash
 
-    mamba install -c openeye openeye-toolkits
+    mamba install -c conda-forge "xtb>=6.7.1"
+
+All other cheminformatics (conformer generation, stereochemistry perception, depiction) is done with the RDKit.
+Neither AmberTools nor the OpenEye toolkits are used.
 
 Installing from source
 ----------------------
@@ -34,7 +37,7 @@ Create a custom conda environment which contains the required dependencies and a
 
 .. code-block:: bash
 
-    mamba env create --name fragmenter --file devtools/conda-envs/meta.yaml
+    mamba env create --name fragmenter --file devtools/conda-envs/test_env.yaml
     mamba activate fragmenter
 
 Finally, install ``openff-fragmenter`` itself:
