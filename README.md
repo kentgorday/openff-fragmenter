@@ -32,6 +32,10 @@ from openff.fragmenter.fragment import WBOFragmenter, WBOOptions
 frag_engine = WBOFragmenter(wbo_options=WBOOptions(solvent="water"))
 ```
 
+By default the WBOs are computed for the RDKit conformers as generated. Setting `WBOOptions(optimize=True)` first
+optimizes each conformer with GFN2-xTB (at `optimization_level="normal"` unless set otherwise, and in the solvent if
+one is set). This removes geometry noise from the WBOs at a substantially higher cost.
+
 Note that the default WBO `threshold` (0.03) was tuned for AM1 WBOs and has not yet been re-tuned for GFN2-xTB.
 
 ## Getting Started

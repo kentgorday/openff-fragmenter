@@ -1,11 +1,13 @@
 """A thin wrapper around the ``xtb`` command-line program for computing GFN2-xTB
 Wiberg bond orders.
 
-``xtb`` is run as a subprocess in a scratch directory. A single point writes a
-``wbo`` file next to its input, with one ``i j wbo`` line (1-based atom indices,
-``i < j``) for every atom pair whose bond order clears a small cutoff (about 0.1).
+``xtb`` is run as a subprocess in a scratch directory. A single point (or the final
+step of an optimization) writes a ``wbo`` file next to its input, with one
+``i j wbo`` line (1-based atom indices, ``i < j``) for every atom pair whose bond
+order clears a small cutoff (about 0.1).
 """
 
+import logging
 import os
 import re
 import shutil
@@ -13,10 +15,15 @@ import subprocess
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Literal
 
 import numpy
 
+logger = logging.getLogger(__name__)
+
 _XTB_EXECUTABLE = "xtb"
+
+OptimizationLevel = Literal["crude", "sloppy", "loose", "lax", "normal", "tight", "vtight", "extreme"]
 
 
 class XTBNotFoundError(Exception):
@@ -121,9 +128,11 @@ def compute_wiberg_bond_orders(
     charge: int,
     n_unpaired: int = 0,
     solvent: str | None = None,
+    optimization_level: OptimizationLevel | None = None,
     timeout: float = 3600.0,
 ) -> dict[tuple[int, int], float]:
-    """Computes GFN2-xTB Wiberg bond orders for a single geometry.
+    """Computes GFN2-xTB Wiberg bond orders for a single geometry, optionally after
+    optimizing it with GFN2-xTB.
 
     Parameters
     ----------
@@ -137,7 +146,13 @@ def compute_wiberg_bond_orders(
         The number of unpaired electrons.
     solvent
         The name of an ALPB implicit solvent known to xtb (e.g. ``'water'``), or
-        ``None`` for the gas phase.
+        ``None`` for the gas phase. When optimizing, the optimization is also run
+        in this solvent.
+    optimization_level
+        If not ``None``, the geometry is first optimized with ``xtb --opt`` at this
+        convergence level and the bond orders are those of the final geometry. An
+        optimization that runs out of cycles is logged as a warning, and the bond
+        orders of its last geometry are returned.
     timeout
         The maximum time [s] to let ``xtb`` run for.
 
@@ -162,7 +177,7 @@ def compute_wiberg_bond_orders(
         command = [
             executable,
             "input.xyz",
-            "--sp",
+            *(["--sp"] if optimization_level is None else ["--opt", optimization_level]),
             "--gfn",
             "2",
             "--chrg",
@@ -191,6 +206,14 @@ def compute_wiberg_bond_orders(
             raise XTBError(
                 f"xtb failed (exit code {result.returncode}) running `{' '.join(command[1:])}`:\n"
                 f"{result.stdout[-2000:]}\n{result.stderr[-1000:]}"
+            )
+
+        if optimization_level is not None and "GEOMETRY OPTIMIZATION CONVERGED" not in result.stdout:
+            # xtb exits successfully and writes the bond orders of its last step when
+            # it runs out of cycles; it only says so in its log.
+            logger.warning(
+                f"The xtb {optimization_level} optimization did not converge; using the bond orders of its "
+                f"last geometry."
             )
 
         wbo_path = work_dir / "wbo"

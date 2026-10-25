@@ -440,12 +440,23 @@ def test_wbo_options_passed_to_fragments(monkeypatch):
 
     monkeypatch.setattr(fragment, "assign_elf10_xtb_bond_orders", mock_assign)
 
-    engine = WBOFragmenter(wbo_options=WBOOptions(max_conformers=7, rms_threshold=0.5, solvent="water"))
+    engine = WBOFragmenter(
+        wbo_options=WBOOptions(
+            max_conformers=7, rms_threshold=0.5, solvent="water", optimize=True, optimization_level="loose"
+        )
+    )
     engine.fragment(Molecule.from_smiles("CCCCC"))
+
+    expected = {"max_confs": 7, "rms_threshold": 0.5, "solvent": "water", "optimization_level": "loose"}
 
     # One call for the parent plus at least one per fragment.
     assert len(calls) >= 3
-    assert all(call == {"max_confs": 7, "rms_threshold": 0.5, "solvent": "water"} for call in calls)
+    assert all(call == expected for call in calls)
+
+
+def test_wbo_options_no_optimization():
+    assert WBOOptions(optimization_level="tight").bond_order_kwargs()["optimization_level"] is None
+    assert WBOOptions(optimize=True).bond_order_kwargs()["optimization_level"] == "normal"
 
 
 def test_wbo_fragment_missing_xtb(monkeypatch):

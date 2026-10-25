@@ -1,5 +1,8 @@
 """Tests for the xtb wrapper."""
 
+import logging
+import subprocess
+
 import numpy
 import pytest
 
@@ -67,6 +70,44 @@ def test_compute_wiberg_bond_orders_solvent():
 
     assert set(gas) == set(water)
     assert gas != water
+
+
+@pytest.mark.parametrize("solvent", [None, "water"])
+def test_compute_wiberg_bond_orders_optimized(solvent, caplog):
+    # Stretch the C-C bond so the optimization has real work to do.
+    coordinates = ETHANE_COORDINATES.copy()
+    coordinates[[0, 2, 3, 4], 2] += 0.3
+
+    with caplog.at_level(logging.WARNING):
+        single_point = compute_wiberg_bond_orders(ETHANE_SYMBOLS, coordinates, charge=0, solvent=solvent)
+        optimized = compute_wiberg_bond_orders(
+            ETHANE_SYMBOLS, coordinates, charge=0, solvent=solvent, optimization_level="normal"
+        )
+
+    assert "did not converge" not in caplog.text
+
+    assert set(optimized) == set(single_point)
+    # The stretched bond is weaker than the relaxed one.
+    assert single_point[(0, 1)] < optimized[(0, 1)] - 0.02
+    assert optimized[(0, 1)] == pytest.approx(1.03, abs=0.02)
+
+
+def test_compute_wiberg_bond_orders_unconverged(monkeypatch, caplog):
+    run = subprocess.run
+
+    def run_one_cycle(command, **kwargs):
+        return run([*command, "--cycles", "1"], **kwargs)
+
+    monkeypatch.setattr(_xtb.subprocess, "run", run_one_cycle)
+
+    coordinates = ETHANE_COORDINATES.copy()
+    coordinates[[0, 2, 3, 4], 2] += 0.3
+
+    with caplog.at_level(logging.WARNING):
+        bond_orders = compute_wiberg_bond_orders(ETHANE_SYMBOLS, coordinates, charge=0, optimization_level="normal")
+
+    assert "did not converge" in caplog.text
+    assert len(bond_orders) == 7
 
 
 def test_compute_wiberg_bond_orders_failure():

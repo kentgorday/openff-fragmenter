@@ -15,7 +15,7 @@ from openff.toolkit.utils.exceptions import AtomMappingWarning
 from pydantic import BaseModel, Field, field_validator
 
 import openff.fragmenter
-from openff.fragmenter._xtb import find_xtb, xtb_version
+from openff.fragmenter._xtb import OptimizationLevel, find_xtb, xtb_version
 from openff.fragmenter.chemi import (
     assign_elf10_xtb_bond_orders,
     extract_fragment,
@@ -887,6 +887,17 @@ class WBOOptions(BaseModel):
         "``'water'``) to compute the WBOs in. If ``None`` the WBOs are computed in the gas phase.",
     )
 
+    optimize: bool = Field(
+        False,
+        description="Whether to optimize each ELF10 conformer with GFN2-xTB (in ``solvent`` if one is "
+        "set) before computing its WBOs. Optimizing removes the noise that unminimized conformer "
+        "geometries add to the WBOs, at a substantially higher cost.",
+    )
+    optimization_level: OptimizationLevel = Field(
+        "normal",
+        description="The ``xtb --opt`` convergence level to use when ``optimize`` is ``True``.",
+    )
+
     @field_validator("method", mode="before")
     @classmethod
     def _reject_am1(cls, value):
@@ -903,6 +914,7 @@ class WBOOptions(BaseModel):
             "max_confs": self.max_conformers,
             "rms_threshold": self.rms_threshold,
             "solvent": self.solvent,
+            "optimization_level": self.optimization_level if self.optimize else None,
         }
 
 

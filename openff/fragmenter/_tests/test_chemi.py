@@ -47,6 +47,19 @@ def test_assign_elf10_xtb_bond_orders_aromatic():
     assert numpy.ptp(carbon_carbon) < 0.03
 
 
+def test_assign_elf10_xtb_bond_orders_optimized():
+    molecule = assign_elf10_xtb_bond_orders(Molecule.from_smiles("c1ccccc1"), optimization_level="normal")
+
+    carbon_carbon = [
+        bond.fractional_bond_order
+        for bond in molecule.bonds
+        if bond.atom1.atomic_number == 6 and bond.atom2.atomic_number == 6
+    ]
+
+    # Optimizing removes the geometry noise, so the six bonds become equivalent.
+    assert numpy.ptp(carbon_carbon) < 0.005
+
+
 def test_assign_elf10_xtb_bond_orders_keeps_atom_map():
     molecule = smiles_to_molecule("CCO", add_atom_map=True)
     atom_map = dict(molecule.properties["atom_map"])

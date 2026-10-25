@@ -9,7 +9,7 @@ from openff.toolkit.topology import Molecule
 from openff.toolkit.utils import RDKitToolkitWrapper
 from openff.units import unit
 
-from openff.fragmenter._xtb import XTBError, compute_wiberg_bond_orders
+from openff.fragmenter._xtb import OptimizationLevel, XTBError, compute_wiberg_bond_orders
 from openff.fragmenter.utils import get_atom_index, get_map_index
 
 logger = logging.getLogger(__name__)
@@ -20,12 +20,14 @@ def assign_elf10_xtb_bond_orders(
     max_confs: int = 800,
     rms_threshold: float = 1.0,
     solvent: str | None = None,
+    optimization_level: OptimizationLevel | None = None,
 ) -> Molecule:
     """Generate ELF10 GFN2-xTB Wiberg bond orders (WBOs) for a molecule.
 
-    Conformers are generated with the RDKit, the ELF10 subset of them is selected,
-    a GFN2-xTB single point is run on each selected conformer with the ``xtb``
-    program, and the WBO of each bond is averaged over those conformers.
+    Conformers are generated with the RDKit and the ELF10 subset of them is selected.
+    Each selected conformer is optionally optimized with GFN2-xTB, a GFN2-xTB WBO
+    calculation is run on it with the ``xtb`` program, and the WBO of each bond is
+    averaged over those conformers.
 
     Parameters
     ----------
@@ -39,6 +41,10 @@ def assign_elf10_xtb_bond_orders(
     solvent
         The name of an ALPB implicit solvent known to ``xtb`` (e.g. ``'water'``) to
         compute the WBOs in, or ``None`` to compute them in the gas phase.
+    optimization_level
+        If not ``None``, each ELF10 conformer is optimized with ``xtb --opt`` at
+        this level (e.g. ``'normal'``) before its WBOs are taken. Otherwise the WBOs
+        are computed for the unminimized RDKit conformers.
 
     Returns
     -------
@@ -70,7 +76,11 @@ def assign_elf10_xtb_bond_orders(
 
     for conformer in molecule.conformers:
         bond_orders = compute_wiberg_bond_orders(
-            symbols, conformer.m_as(unit.angstrom), charge=charge, solvent=solvent
+            symbols,
+            conformer.m_as(unit.angstrom),
+            charge=charge,
+            solvent=solvent,
+            optimization_level=optimization_level,
         )
 
         # xtb only lists pairs above a small cutoff (~0.1), which every real bond in
