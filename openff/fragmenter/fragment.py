@@ -12,11 +12,12 @@ from openff.toolkit.utils import (
     ToolkitWrapper,
 )
 from openff.toolkit.utils.exceptions import AtomMappingWarning
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 import openff.fragmenter
+from openff.fragmenter._xtb import OptimizationLevel, find_xtb, xtb_version
 from openff.fragmenter.chemi import (
-    assign_elf10_am1_bond_orders,
+    assign_elf10_xtb_bond_orders,
     extract_fragment,
     find_ring_systems,
     find_stereocenters,
@@ -822,7 +823,8 @@ class Fragmenter(BaseModel, abc.ABC):
             rotatable bonds such as -OH, -NH2 -CH3.
         toolkit_registry
             The underlying cheminformatics toolkits to use for things like conformer
-            generation, WBO computation etc. If no value is provided, the current
+            generation. WBOs are always computed with ``xtb`` and ELF10 conformer
+            selection always uses the RDKit. If no value is provided, the current
             ``GLOBAL_TOOLKIT_REGISTRY`` will be used. See the OpenFF toolkit
             documentation for more information.
 
@@ -866,8 +868,10 @@ class Fragmenter(BaseModel, abc.ABC):
 class WBOOptions(BaseModel):
     """A set of options for controlling how Wiberg Bond Orders are computed."""
 
-    method: Literal["am1-wiberg-elf10"] = Field(
-        "am1-wiberg-elf10", description="The method to use when computing the WBOs."
+    method: Literal["gfn2-xtb-wiberg-elf10"] = Field(
+        "gfn2-xtb-wiberg-elf10",
+        description="The method to use when computing the WBOs. GFN2-xTB WBOs are computed "
+        "with the ``xtb`` program, which must be on the ``PATH``.",
     )
 
     max_conformers: int = Field(800, description="The maximum number of conformers to average the WBOs over.")
@@ -876,6 +880,45 @@ class WBOOptions(BaseModel):
         description="The minimum RMS value [Angstrom] at which two conformers are "
         "considered redundant and one is deleted.",
     )
+
+    solvent: str | None = Field(
+        "water",
+        description="The ALPB implicit solvent (any name ``xtb --alpb`` accepts) to compute the WBOs in, "
+        "or ``None`` to compute them in the gas phase. Water is the default because optimizing in the gas "
+        "phase can change a molecule's bonding: zwitterions transfer a proton between their charged groups, "
+        "and other ions can react intramolecularly. Water avoids this, and was not slower on the molecules we "
+        "tested.",
+    )
+
+    optimize: bool = Field(
+        True,
+        description="Whether to optimize each ELF10 conformer with GFN2-xTB (in ``solvent`` if one is "
+        "set) before computing its WBOs. Turning this off is faster, but the WBOs then carry the "
+        "geometry noise of the unminimized conformers.",
+    )
+    optimization_level: OptimizationLevel = Field(
+        "normal",
+        description="The ``xtb --opt`` convergence level to use when ``optimize`` is ``True``.",
+    )
+
+    @field_validator("method", mode="before")
+    @classmethod
+    def _reject_am1(cls, value):
+        if value == "am1-wiberg-elf10":
+            raise ValueError(
+                "AM1 WBOs ('am1-wiberg-elf10') are no longer supported. Use 'gfn2-xtb-wiberg-elf10', "
+                "noting that WBO thresholds tuned for AM1 may need to be re-tuned."
+            )
+        return value
+
+    def _bond_order_kwargs(self) -> dict[str, Any]:
+        """The keyword arguments to pass to ``assign_elf10_xtb_bond_orders``."""
+        return {
+            "max_confs": self.max_conformers,
+            "rms_threshold": self.rms_threshold,
+            "solvent": self.solvent,
+            "optimization_level": self.optimization_level if self.optimize else None,
+        }
 
 
 class WBOFragmenter(Fragmenter):
@@ -917,13 +960,14 @@ class WBOFragmenter(Fragmenter):
             ring_systems,
         ) = self._prepare_molecule(molecule, self.functional_groups, self.keep_non_rotor_ring_substituents)
 
-        # Calculate WBO for molecule
-        if self.wbo_options.method != "am1-wiberg-elf10":
-            raise NotImplementedError("WBOs can currently only be computed using 'am1-wiberg-elf10'.")
+        # Fail now, rather than part way through, if xtb is missing.
+        find_xtb()
 
-        molecule = assign_elf10_am1_bond_orders(
-            molecule, self.wbo_options.max_conformers, self.wbo_options.rms_threshold
-        )
+        # Calculate WBO for molecule. The same options are used for every fragment so
+        # that the parent and fragment WBOs are comparable.
+        bond_order_kwargs = self.wbo_options._bond_order_kwargs()
+
+        molecule = assign_elf10_xtb_bond_orders(molecule, **bond_order_kwargs)
 
         rotatable_bonds = self.find_rotatable_bonds(molecule, target_bond_smarts)
         wbo_rotor_bonds = self._get_rotor_wbo(molecule, rotatable_bonds)
@@ -938,9 +982,13 @@ class WBOFragmenter(Fragmenter):
                 wbo_rotor_bonds[bond],
                 threshold=self.threshold,
                 heuristic=self.heuristic,
+                **bond_order_kwargs,
             )
             for bond in wbo_rotor_bonds
         }
+
+        provenance = self._default_provenance()
+        provenance["xtb_version"] = xtb_version()
 
         return FragmentationResult(
             parent_smiles=molecule.to_smiles(mapped=True),
@@ -948,7 +996,7 @@ class WBOFragmenter(Fragmenter):
                 Fragment(smiles=fragment.to_smiles(mapped=True), bond_indices=bond)
                 for bond, fragment in fragments.items()
             ],
-            provenance=self._default_provenance(),
+            provenance=provenance,
         )
 
     @classmethod
@@ -1011,12 +1059,16 @@ class WBOFragmenter(Fragmenter):
         fragment_map = fragment.properties.pop("atom_map", None)
 
         try:
-            fragment = assign_elf10_am1_bond_orders(fragment, **kwargs)
+            fragment = assign_elf10_xtb_bond_orders(fragment, **kwargs)
 
-        except RuntimeError:
+        except RuntimeError as error:
             # Most of the time it fails because it is either missing parameters or a
-            # functional group that should not be fragmented was fragmented
-            logger.warning(f"Cannot calculate WBO for fragment {fragment.to_smiles()}. Continue growing fragment")
+            # functional group that should not be fragmented was fragmented. Errors that
+            # growing cannot fix, such as a missing xtb or an optimization that changes
+            # the fragment's bonding, are deliberately not RuntimeErrors and propagate.
+            logger.warning(
+                f"Cannot calculate WBO for fragment {fragment.to_smiles()}, so continuing to grow it: {error}"
+            )
 
             # TODO: handle different kinds of failures instead of just continuing to
             #      grow until the failure goes away. Some fail because there are

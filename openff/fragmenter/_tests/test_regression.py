@@ -36,7 +36,7 @@ from openff.fragmenter.fragment import WBOFragmenter
 )
 @pytest.mark.fragmenter_slow
 def test_wbo_regression(parent, fragments):
-    """Make sure we can produce the expected fragments using both openeye and AT+RDKIT."""
+    """Make sure we can produce the expected fragments."""
     parent = Molecule.from_mapped_smiles(parent)
     engine = WBOFragmenter(keep_non_rotor_ring_substituents=True, threshold=0.03)
     result = engine.fragment(molecule=parent)

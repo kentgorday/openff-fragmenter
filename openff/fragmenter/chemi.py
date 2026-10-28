@@ -1,4 +1,4 @@
-"""functions to manipulate, read and write OpenEye and Psi4 molecules"""
+"""Functions for computing bond orders of, and manipulating, OpenFF molecules."""
 
 import copy
 import logging
@@ -6,58 +6,157 @@ import logging
 import networkx
 import numpy
 from openff.toolkit.topology import Molecule
-from openff.toolkit.utils import LicenseError, ToolkitUnavailableException
-from openff.utilities import MissingOptionalDependencyError, requires_oe_module
+from openff.toolkit.utils import RDKitToolkitWrapper
+from openff.units import unit
 
+from openff.fragmenter._xtb import (
+    OptimizationLevel,
+    XTBBondingChangedError,
+    XTBError,
+    compute_wiberg_bond_orders,
+)
 from openff.fragmenter.utils import get_atom_index, get_map_index
 
 logger = logging.getLogger(__name__)
 
 
-def assign_elf10_am1_bond_orders(molecule: Molecule, max_confs: int = 800, rms_threshold: float = 1.0) -> Molecule:
-    """Generate ELF10 AM1 WBOs for a molecule.
+def assign_elf10_xtb_bond_orders(
+    molecule: Molecule,
+    max_confs: int = 800,
+    rms_threshold: float = 1.0,
+    solvent: str | None = "water",
+    optimization_level: OptimizationLevel | None = "normal",
+) -> Molecule:
+    """Generate ELF10 GFN2-xTB Wiberg bond orders (WBOs) for a molecule.
+
+    Conformers are generated with the RDKit and the ELF10 subset of them is selected.
+    Each selected conformer is optimized with GFN2-xTB (unless ``optimization_level``
+    is ``None``), a GFN2-xTB WBO calculation is run on it with the ``xtb`` program,
+    and the WBO of each bond is averaged over those conformers.
 
     Parameters
     ----------
     molecule
         The molecule to compute WBOs for.
-    max_confs : int, optional, default=800
-        Max number of conformers to generate
+    max_confs
+        Max number of conformers to generate.
     rms_threshold
         The minimum RMS value [Angstrom] at which two conformers are considered redundant
         and one is deleted.
+    solvent
+        The name of an ALPB implicit solvent known to ``xtb`` to compute the WBOs in,
+        or ``None`` to compute them in the gas phase. See ``WBOOptions.solvent`` for
+        why water is the default.
+    optimization_level
+        The ``xtb --opt`` convergence level to optimize each ELF10 conformer at
+        before its WBOs are taken, or ``None`` to compute the WBOs for the
+        unminimized RDKit conformers.
+
+    Raises
+    ------
+    XTBBondingChangedError
+        If optimizing a conformer changes the molecule's bonding.
 
     Returns
     -------
-        A new molecule which contains ELF10 AM1 Wiberg Bond orders.
+        A new molecule which contains ELF10 GFN2-xTB Wiberg bond orders.
     """
+
+    from rdkit.Chem.rdForceFieldHelpers import MMFFHasAllMoleculeParams
 
     molecule = copy.deepcopy(molecule)
 
     # Store the atom map separately in case it gets removed by a TK.
     atom_map = molecule.properties.pop("atom_map", None)
 
-    # Generate a set of ELF10 conformers.
+    charge = int(numpy.rint(molecule.total_charge.m_as(unit.elementary_charge)))
+    n_electrons = sum(atom.atomic_number for atom in molecule.atoms) - charge
+
+    if n_electrons % 2 != 0:
+        raise ValueError(
+            f"{molecule.to_smiles()} has an odd number of electrons. Only closed-shell molecules are supported."
+        )
+
+    # Generate a set of ELF10 conformers. The RDKit implementation of ELF ranks the
+    # conformers using MMFF94 charges, so no semi-empirical charges are needed, but
+    # MMFF94 must have parameters for every atom. Check that here, as the toolkit
+    # otherwise fails with an unhelpful AttributeError.
+    if not MMFFHasAllMoleculeParams(molecule.to_rdkit()):
+        raise ValueError(
+            f"{molecule.to_smiles()} contains atoms that MMFF94 has no parameters for (e.g. boron or selenium). "
+            "MMFF94 charges are needed to select the ELF10 conformers, so its WBOs cannot be computed."
+        )
+
     molecule = _generate_conformers(molecule, max_confs, rms_threshold)
-    molecule.apply_elf_conformer_selection()
+    molecule.apply_elf_conformer_selection(toolkit_registry=RDKitToolkitWrapper())
+
+    symbols = [atom.symbol for atom in molecule.atoms]
+    bond_keys = [tuple(sorted((bond.atom1_index, bond.atom2_index))) for bond in molecule.bonds]
 
     per_conformer_bond_orders = []
 
     for conformer in molecule.conformers:
-        molecule.assign_fractional_bond_orders("am1-wiberg", use_conformers=[conformer])
+        bond_orders = compute_wiberg_bond_orders(
+            symbols,
+            conformer.m_as(unit.angstrom),
+            charge=charge,
+            solvent=solvent,
+            optimization_level=optimization_level,
+        )
 
-        per_conformer_bond_orders.append([bond.fractional_bond_order for bond in molecule.bonds])
+        # xtb only lists pairs above a small cutoff (~0.1), which every real bond in
+        # a closed-shell molecule clears. A missing bond is never a zero bond order:
+        # after an optimization it means the bonding changed, and otherwise that the
+        # calculation went wrong.
+        missing = [key for key in bond_keys if key not in bond_orders]
+
+        if missing:
+            _raise_missing_bond_orders(molecule, missing, solvent, optimization_level)
+
+        per_conformer_bond_orders.append([bond_orders[key] for key in bond_keys])
 
     bond_orders = [*numpy.mean(per_conformer_bond_orders, axis=0)]
 
     for bond, bond_order in zip(molecule.bonds, bond_orders):
-        bond.fractional_bond_order = bond_order
+        bond.fractional_bond_order = float(bond_order)
 
     # Restore the atom map.
     if atom_map is not None:
         molecule.properties["atom_map"] = atom_map
 
     return molecule
+
+
+def _raise_missing_bond_orders(
+    molecule: Molecule,
+    missing: list[tuple[int, int]],
+    solvent: str | None,
+    optimization_level: OptimizationLevel | None,
+):
+    """Raises the error for bonds of ``molecule`` that xtb reported no WBO for."""
+
+    bonds = ", ".join(f"{molecule.atoms[i].symbol}{i}-{molecule.atoms[j].symbol}{j}" for i, j in missing)
+    smiles = molecule.to_smiles(explicit_hydrogens=False)
+
+    if optimization_level is None:
+        raise XTBError(f"xtb reported no Wiberg bond order for the {bonds} bond(s) (atom indices) of {smiles}.")
+
+    if solvent is None:
+        where = "in the gas phase"
+        cause = "a proton moving between charged groups, as zwitterions do in the gas phase"
+        remedy = (
+            "Compute the WBOs in an implicit solvent (WBOOptions(solvent='water'), the default) or without "
+            "optimizing (WBOOptions(optimize=False))."
+        )
+    else:
+        where = f"in {solvent}"
+        cause = "a proton moving between charged groups"
+        remedy = "Compute the WBOs without optimizing (WBOOptions(optimize=False))."
+
+    raise XTBBondingChangedError(
+        f"Optimizing {smiles} with GFN2-xTB {where} changed its bonding: xtb reports no bond order for its "
+        f"{bonds} bond(s) (atom indices) at the optimized geometry. This is usually {cause}. {remedy}"
+    )
 
 
 def _generate_conformers(molecule: Molecule, max_confs: int = 800, rms_threshold: float = 1.0) -> Molecule:
@@ -77,8 +176,6 @@ def _generate_conformers(molecule: Molecule, max_confs: int = 800, rms_threshold
     -------
         A new multi-conformer molecule with up to max_confs conformers.
     """
-
-    from openff.units import unit
 
     molecule = copy.deepcopy(molecule)
 
@@ -153,41 +250,6 @@ def find_ring_systems(molecule: Molecule) -> dict[int, int]:
     return ring_systems
 
 
-@requires_oe_module("oechem")
-def _find_oe_stereocenters(
-    molecule: Molecule,
-) -> tuple[list[int], list[tuple[int, int]]]:
-    """A method which returns the of the stereogenic atom and bonds of a molecule
-    using the OpenEye toolkit.
-
-    Parameters
-    ----------
-    molecule
-        The molecule whose stereocenters should be returned.
-
-    Notes
-    -----
-    * This method currently deals with OE directly and should be removed once
-      the API points suggested in openff-toolkit issue #903 have been added.
-
-    Returns
-    -------
-        The indices of the stereogenic atoms in the molecule and the indices of the
-        atoms involved in stereogenic bonds in the molecule.
-    """
-
-    from openeye import oechem
-
-    oe_molecule = molecule.to_openeye()
-    oechem.OEPerceiveChiral(oe_molecule)
-
-    stereogenic_atoms = {atom.GetIdx() for atom in oe_molecule.GetAtoms() if atom.IsChiral()}
-
-    stereogenic_bonds = {(bond.GetBgnIdx(), bond.GetEndIdx()) for bond in oe_molecule.GetBonds() if bond.IsChiral()}
-
-    return sorted(stereogenic_atoms), sorted(stereogenic_bonds)
-
-
 def _find_rd_stereocenters(
     molecule: Molecule,
 ) -> tuple[list[int], list[tuple[int, int]]]:
@@ -242,28 +304,13 @@ def find_stereocenters(molecule: Molecule) -> tuple[list[int], list[tuple[int, i
     molecule
         The molecule whose stereocenters should be returned.
 
-    Notes
-    -----
-    * This method currently deals with OE and RDKit molecules and should be updated once
-      the API points suggested in openff-toolkit issue #903 have been added.
-
     Returns
     -------
         The indices of the stereogenic atoms in the molecule and the indices of the
         atoms involved in stereogenic bonds in the molecule.
     """
 
-    try:
-        stereogenic_atoms, stereogenic_bonds = _find_oe_stereocenters(molecule)
-    except (
-        ModuleNotFoundError,
-        ToolkitUnavailableException,
-        LicenseError,
-        MissingOptionalDependencyError,
-    ):
-        stereogenic_atoms, stereogenic_bonds = _find_rd_stereocenters(molecule)
-
-    return stereogenic_atoms, stereogenic_bonds
+    return _find_rd_stereocenters(molecule)
 
 
 def _extract_rd_fragment(molecule: Molecule, atom_indices: set[int], bond_indices: set[tuple[int, int]]) -> Molecule:
@@ -350,68 +397,6 @@ def _extract_rd_fragment(molecule: Molecule, atom_indices: set[int], bond_indice
     return fragment
 
 
-@requires_oe_module("oechem")
-def _extract_oe_fragment(molecule: Molecule, atom_indices: set[int], bond_indices: set[tuple[int, int]]) -> Molecule:
-    from openeye import oechem
-
-    oe_molecule = molecule.to_openeye()
-
-    # Restore the map indices as to_openeye does not automatically add them.
-    for atom_index, map_index in molecule.properties["atom_map"].items():
-        oe_atom = oe_molecule.GetAtom(oechem.OEHasAtomIdx(atom_index))
-        oe_atom.SetMapIdx(map_index)
-
-    # Include any Hs bonded to the included atom set so we can retain their map
-    # indices.
-    for map_index in {*atom_indices}:
-        oe_atom = oe_molecule.GetAtom(oechem.OEHasMapIdx(map_index))
-
-        for neighbour in oe_atom.GetAtoms():
-            if neighbour.GetAtomicNum() != 1 or neighbour.GetMapIdx() < 1 or neighbour.GetMapIdx() in atom_indices:
-                continue
-
-            atom_indices.add(neighbour.GetMapIdx())
-            bond_indices.add((map_index, neighbour.GetMapIdx()))
-
-    atom_bond_set = oechem.OEAtomBondSet()
-
-    for map_index in atom_indices:
-        atom = oe_molecule.GetAtom(oechem.OEHasMapIdx(map_index))
-        atom_bond_set.AddAtom(atom)
-
-    for map_index_1, map_index_2 in bond_indices:
-        atom_1 = oe_molecule.GetAtom(oechem.OEHasMapIdx(map_index_1))
-        atom_2 = oe_molecule.GetAtom(oechem.OEHasMapIdx(map_index_2))
-
-        bond = oe_molecule.GetBond(atom_1, atom_2)
-
-        if not bond:
-            raise ValueError(f"{(map_index_1, map_index_2)} is a disconnected bond")
-
-        atom_bond_set.AddBond(bond)
-
-    atom_predicate = oechem.OEIsAtomMember(atom_bond_set.GetAtoms())
-    bond_predicate = oechem.OEIsBondMember(atom_bond_set.GetBonds())
-
-    fragment = oechem.OEMol()
-    oechem.OESubsetMol(fragment, oe_molecule, atom_predicate, bond_predicate, True)
-
-    oechem.OEAddExplicitHydrogens(fragment)
-    oechem.OEPerceiveChiral(fragment)
-
-    # Always restore map?
-    # if restore_maps:
-    # In some cases (symmetric molecules) this changes the atom map so skip it
-    # restore_atom_map(fragment)
-    # atom map should be restored for combinatorial fragmentation
-    # Perceive stereo and check that defined stereo did not change
-    oechem.OEPerceiveChiral(fragment)
-    oechem.OE3DToAtomStereo(fragment)
-    oechem.OE3DToBondStereo(fragment)
-
-    return Molecule.from_openeye(fragment, allow_undefined_stereo=True)
-
-
 def extract_fragment(molecule: Molecule, atom_indices: set[int], bond_indices: set[tuple[int, int]]) -> Molecule:
     """Returns a fragment which contains the specified atoms and bonds of a parent
     molecule
@@ -431,15 +416,7 @@ def extract_fragment(molecule: Molecule, atom_indices: set[int], bond_indices: s
     if not all(i in atom_indices for map_tuple in bond_indices for i in map_tuple):
         raise ValueError("The ``bond_indices`` set includes atoms not in the ``atom_indices`` set.")
 
-    try:
-        fragment = _extract_oe_fragment(molecule, atom_indices, bond_indices)
-    except (
-        ModuleNotFoundError,
-        ToolkitUnavailableException,
-        LicenseError,
-        MissingOptionalDependencyError,
-    ):
-        fragment = _extract_rd_fragment(molecule, atom_indices, bond_indices)
+    fragment = _extract_rd_fragment(molecule, atom_indices, bond_indices)
 
     # Sanity check that all atoms are still bonded
     fragment_smiles = fragment.to_smiles()

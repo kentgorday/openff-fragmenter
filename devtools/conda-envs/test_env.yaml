@@ -12,11 +12,11 @@ dependencies:
 
     # OpenFF stack
   - openff-toolkit-base >=0.14.4
-  - openff-interchange >=0.4
-
-    # Optional tools
-  - ambertools
   - rdkit
+
+    # Wiberg bond orders (GFN2-xTB). Build >=4 of 6.7.1 fixes a Fortran
+    # format-string crash (grimme-lab/xtb#1332).
+  - xtb >=6.7.1
 
     # Testing
   - pytest
