@@ -123,8 +123,6 @@ def _generate_conformers(molecule: Molecule, max_confs: int = 800, rms_threshold
         A new multi-conformer molecule with up to max_confs conformers.
     """
 
-    from openff.units import unit
-
     molecule = copy.deepcopy(molecule)
 
     # Store the atom map separately in case it gets removed / mangled by a TK.

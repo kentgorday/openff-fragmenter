@@ -908,7 +908,7 @@ class WBOOptions(BaseModel):
             )
         return value
 
-    def bond_order_kwargs(self) -> dict[str, Any]:
+    def _bond_order_kwargs(self) -> dict[str, Any]:
         """The keyword arguments to pass to ``assign_elf10_xtb_bond_orders``."""
         return {
             "max_confs": self.max_conformers,
@@ -962,7 +962,7 @@ class WBOFragmenter(Fragmenter):
 
         # Calculate WBO for molecule. The same options are used for every fragment so
         # that the parent and fragment WBOs are comparable.
-        bond_order_kwargs = self.wbo_options.bond_order_kwargs()
+        bond_order_kwargs = self.wbo_options._bond_order_kwargs()
 
         molecule = assign_elf10_xtb_bond_orders(molecule, **bond_order_kwargs)
 

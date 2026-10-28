@@ -14,7 +14,7 @@ def smarts_set_to_map_indices(input_set: set[str], molecule: Molecule) -> set[in
 
     The is useful for tests which need to define expected values for atoms / bonds
     with specific map indices in a way that is agnostic of how the molecule used in
-    the test is ordered (i.e. whether it was canonically ordered.
+    the test is ordered.
     """
 
     return_value = set()
@@ -41,7 +41,7 @@ def key_smarts_to_map_indices[T](input_dictionary: dict[str, T], molecule: Molec
 
     The is useful for tests which need to define expected values for atoms / bonds
     with specific map indices in a way that is agnostic of how the molecule used in
-    the test is ordered (i.e. whether it was canonically ordered.
+    the test is ordered.
     """
 
     return_value = {}
@@ -72,7 +72,7 @@ def value_smarts_to_map_indices(
 
     The is useful for tests which need to define expected values for atoms / bonds
     with specific map indices in a way that is agnostic of how the molecule used in
-    the test is ordered (i.e. whether it was canonically ordered.
+    the test is ordered.
     """
 
     return_value = defaultdict(set)

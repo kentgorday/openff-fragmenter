@@ -4,6 +4,7 @@ Unit and regression test for the fragmenter.fragmenter module.
 
 import copy
 import logging
+import re
 
 import numpy
 import pytest
@@ -414,7 +415,7 @@ def test_wbo_fragment():
     assert {fragment.bond_indices for fragment in result.fragments} == {(3, 5), (4, 5)}
 
     assert result.provenance["options"]["wbo_options"]["method"] == "gfn2-xtb-wiberg-elf10"
-    assert result.provenance["xtb_version"].startswith("6.")
+    assert re.match(r"\d+\.\d+\.\d+", result.provenance["xtb_version"])
 
 
 def test_wbo_options_reject_am1():
@@ -455,8 +456,8 @@ def test_wbo_options_passed_to_fragments(monkeypatch):
 
 
 def test_wbo_options_no_optimization():
-    assert WBOOptions(optimization_level="tight").bond_order_kwargs()["optimization_level"] is None
-    assert WBOOptions(optimize=True).bond_order_kwargs()["optimization_level"] == "normal"
+    assert WBOOptions(optimization_level="tight")._bond_order_kwargs()["optimization_level"] is None
+    assert WBOOptions(optimize=True)._bond_order_kwargs()["optimization_level"] == "normal"
 
 
 def test_wbo_fragment_missing_xtb(monkeypatch):

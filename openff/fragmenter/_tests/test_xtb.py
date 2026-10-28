@@ -1,6 +1,7 @@
 """Tests for the xtb wrapper."""
 
 import logging
+import re
 import subprocess
 
 import numpy
@@ -52,7 +53,7 @@ def test_find_xtb_missing(monkeypatch):
 
 
 def test_xtb_version():
-    assert xtb_version().startswith("6.")
+    assert re.match(r"\d+\.\d+\.\d+", xtb_version())
 
 
 def test_compute_wiberg_bond_orders():
