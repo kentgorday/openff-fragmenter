@@ -888,10 +888,10 @@ class WBOOptions(BaseModel):
     )
 
     optimize: bool = Field(
-        False,
+        True,
         description="Whether to optimize each ELF10 conformer with GFN2-xTB (in ``solvent`` if one is "
-        "set) before computing its WBOs. Optimizing removes the noise that unminimized conformer "
-        "geometries add to the WBOs, at a substantially higher cost.",
+        "set) before computing its WBOs. Turning this off is faster, but the WBOs then carry the "
+        "geometry noise of the unminimized conformers.",
     )
     optimization_level: OptimizationLevel = Field(
         "normal",

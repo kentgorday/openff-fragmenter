@@ -455,9 +455,10 @@ def test_wbo_options_passed_to_fragments(monkeypatch):
     assert all(call == expected for call in calls)
 
 
-def test_wbo_options_no_optimization():
-    assert WBOOptions(optimization_level="tight")._bond_order_kwargs()["optimization_level"] is None
-    assert WBOOptions(optimize=True)._bond_order_kwargs()["optimization_level"] == "normal"
+def test_wbo_options_optimization():
+    assert WBOOptions()._bond_order_kwargs()["optimization_level"] == "normal"
+    assert WBOOptions(optimization_level="tight")._bond_order_kwargs()["optimization_level"] == "tight"
+    assert WBOOptions(optimize=False, optimization_level="tight")._bond_order_kwargs()["optimization_level"] is None
 
 
 def test_wbo_fragment_missing_xtb(monkeypatch):

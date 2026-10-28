@@ -32,7 +32,7 @@ def test_assign_elf10_xtb_bond_orders():
 
 
 def test_assign_elf10_xtb_bond_orders_aromatic():
-    molecule = assign_elf10_xtb_bond_orders(Molecule.from_smiles("c1ccccc1"))
+    molecule = assign_elf10_xtb_bond_orders(Molecule.from_smiles("c1ccccc1"), optimization_level=None)
 
     carbon_carbon = [
         bond.fractional_bond_order

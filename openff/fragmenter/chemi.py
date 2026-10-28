@@ -20,14 +20,14 @@ def assign_elf10_xtb_bond_orders(
     max_confs: int = 800,
     rms_threshold: float = 1.0,
     solvent: str | None = None,
-    optimization_level: OptimizationLevel | None = None,
+    optimization_level: OptimizationLevel | None = "normal",
 ) -> Molecule:
     """Generate ELF10 GFN2-xTB Wiberg bond orders (WBOs) for a molecule.
 
     Conformers are generated with the RDKit and the ELF10 subset of them is selected.
-    Each selected conformer is optionally optimized with GFN2-xTB, a GFN2-xTB WBO
-    calculation is run on it with the ``xtb`` program, and the WBO of each bond is
-    averaged over those conformers.
+    Each selected conformer is optimized with GFN2-xTB (unless ``optimization_level``
+    is ``None``), a GFN2-xTB WBO calculation is run on it with the ``xtb`` program,
+    and the WBO of each bond is averaged over those conformers.
 
     Parameters
     ----------
@@ -42,9 +42,9 @@ def assign_elf10_xtb_bond_orders(
         The name of an ALPB implicit solvent known to ``xtb`` (e.g. ``'water'``) to
         compute the WBOs in, or ``None`` to compute them in the gas phase.
     optimization_level
-        If not ``None``, each ELF10 conformer is optimized with ``xtb --opt`` at
-        this level (e.g. ``'normal'``) before its WBOs are taken. Otherwise the WBOs
-        are computed for the unminimized RDKit conformers.
+        The ``xtb --opt`` convergence level to optimize each ELF10 conformer at
+        before its WBOs are taken, or ``None`` to compute the WBOs for the
+        unminimized RDKit conformers.
 
     Returns
     -------
