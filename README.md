@@ -23,21 +23,29 @@ The `WBOFragmenter` computes Wiberg bond orders (WBOs) with GFN2-xTB by running 
 [`xtb`](https://github.com/grimme-lab/xtb) program, which must be on your `PATH`. Conformers, stereochemistry
 and depictions are handled by the RDKit; neither AmberTools nor the OpenEye toolkits are used.
 
-WBOs are computed in the gas phase by default. To compute them in an ALPB implicit solvent instead, pass any
-solvent name that `xtb --alpb` accepts:
+By default each conformer is optimized with GFN2-xTB (at `optimization_level="normal"`) before its WBOs are
+computed. Setting `WBOOptions(optimize=False)` skips the optimization and computes the WBOs for the RDKit conformers
+as generated. This is faster, but the WBOs then carry geometry noise: the six C-C WBOs of benzene spread by about
+0.017 without optimization, against a default `threshold` of 0.03.
+
+Both the optimization and the WBOs are computed in water, using xtb's ALPB implicit solvent model, by default. To use
+another solvent, pass any name that `xtb --alpb` accepts, or `None` for the gas phase:
 
 ```python
 from openff.fragmenter.fragment import WBOFragmenter, WBOOptions
 
-frag_engine = WBOFragmenter(wbo_options=WBOOptions(solvent="water"))
+frag_engine = WBOFragmenter(wbo_options=WBOOptions(solvent=None))
 ```
 
-By default each conformer is optimized with GFN2-xTB (at `optimization_level="normal"`, and in the solvent if one is
-set) before its WBOs are computed. Setting `WBOOptions(optimize=False)` skips the optimization and computes the WBOs
-for the RDKit conformers as generated. This is faster, but the WBOs then carry geometry noise: the six C-C WBOs of
-benzene spread by about 0.017 without optimization, against a default `threshold` of 0.03.
+Water is the default because optimizing in the gas phase can change a molecule's bonding: zwitterions transfer a
+proton between their charged groups, and other ions can react intramolecularly. When that happens fragmentation stops
+with an `XTBBondingChangedError` rather than computing WBOs for a different molecule. In water these molecules keep
+their bonding, and fragmentation was not slower on the molecules we tested. If the fragments are destined for
+gas-phase QM torsion scans, gas-phase WBOs may track the electronic structure those scans see more closely, but a
+fragment whose bonding changes in a gas-phase optimization is unlikely to survive such a scan either.
 
-Note that the default WBO `threshold` (0.03) was tuned for AM1 WBOs and has not yet been re-tuned for GFN2-xTB.
+Note that the default WBO `threshold` (0.03) was tuned for AM1 WBOs in the gas phase and has not yet been re-tuned
+for GFN2-xTB in water.
 
 ## Getting Started
 

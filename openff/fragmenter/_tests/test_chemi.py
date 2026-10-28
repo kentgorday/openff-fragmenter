@@ -9,7 +9,7 @@ from openff.toolkit.utils.exceptions import AtomMappingWarning, RadicalsNotSuppo
 from openff.units import unit
 
 from openff.fragmenter import chemi
-from openff.fragmenter._xtb import XTBError
+from openff.fragmenter._xtb import XTBBondingChangedError, XTBError
 from openff.fragmenter.chemi import (
     _extract_rd_fragment,
     _find_rd_stereocenters,
@@ -75,8 +75,23 @@ def test_assign_elf10_xtb_bond_orders_charged():
     assert all(bond.fractional_bond_order is not None for bond in molecule.bonds)
 
 
+def test_assign_elf10_xtb_bond_orders_defaults(monkeypatch):
+    calls = []
+
+    def mock_compute(symbols, coordinates, **kwargs):
+        calls.append(kwargs)
+        return {(0, 1): 1.0, (0, 2): 1.0, (0, 3): 1.0, (0, 4): 1.0}
+
+    monkeypatch.setattr(chemi, "compute_wiberg_bond_orders", mock_compute)
+
+    assign_elf10_xtb_bond_orders(Molecule.from_smiles("C"), max_confs=1)
+
+    assert len(calls) > 0
+    assert all(call["solvent"] == "water" and call["optimization_level"] == "normal" for call in calls)
+
+
 def test_assign_elf10_xtb_bond_orders_solvent():
-    gas = assign_elf10_xtb_bond_orders(Molecule.from_smiles("CC(=O)[O-]"), max_confs=1)
+    gas = assign_elf10_xtb_bond_orders(Molecule.from_smiles("CC(=O)[O-]"), max_confs=1, solvent=None)
     water = assign_elf10_xtb_bond_orders(Molecule.from_smiles("CC(=O)[O-]"), max_confs=1, solvent="water")
 
     gas_orders = numpy.array([bond.fractional_bond_order for bond in gas.bonds])
@@ -111,10 +126,42 @@ def test_assign_elf10_xtb_bond_orders_open_shell():
 
 
 def test_assign_elf10_xtb_bond_orders_missing_bond(monkeypatch):
+    """Without an optimization the geometry keeps its bonds, so a missing WBO means
+    the calculation went wrong, which fragment growth may treat as a failed fragment."""
+
     monkeypatch.setattr(chemi, "compute_wiberg_bond_orders", lambda *args, **kwargs: {})
 
-    with pytest.raises(XTBError, match="no Wiberg bond order"):
-        assign_elf10_xtb_bond_orders(Molecule.from_smiles("C"), max_confs=1)
+    with pytest.raises(XTBError, match="no Wiberg bond order for the C0-H1, C0-H2"):
+        assign_elf10_xtb_bond_orders(Molecule.from_smiles("C"), max_confs=1, optimization_level=None)
+
+
+@pytest.mark.parametrize("solvent", [None, "water"])
+def test_assign_elf10_xtb_bond_orders_bonding_changed(monkeypatch, solvent):
+    monkeypatch.setattr(chemi, "compute_wiberg_bond_orders", lambda *args, **kwargs: {})
+
+    with pytest.raises(XTBBondingChangedError, match="changed its bonding") as error_info:
+        assign_elf10_xtb_bond_orders(Molecule.from_smiles("C"), max_confs=1, solvent=solvent)
+
+    message = str(error_info.value)
+
+    assert "C0-H1" in message
+    assert "WBOOptions(optimize=False)" in message
+    # Only suggest water if it is not already being used.
+    assert ("WBOOptions(solvent='water')" in message) == (solvent is None)
+
+
+def test_assign_elf10_xtb_bond_orders_zwitterion():
+    """Optimized in the gas phase, glycine's ammonium group passes a proton to its
+    carboxylate. In water it keeps its bonding."""
+
+    glycine = Molecule.from_smiles("[NH3+]CC(=O)[O-]")
+
+    with pytest.raises(XTBBondingChangedError, match=r"in the gas phase changed its bonding.*N0-H"):
+        assign_elf10_xtb_bond_orders(glycine, max_confs=1, solvent=None)
+
+    molecule = assign_elf10_xtb_bond_orders(glycine, max_confs=1)
+
+    assert all(bond.fractional_bond_order is not None for bond in molecule.bonds)
 
 
 @pytest.mark.parametrize("smiles, max_confs", [("CCCCCCC", 1), ("CCCCCCC", 3)])

@@ -9,7 +9,12 @@ from openff.toolkit.topology import Molecule
 from openff.toolkit.utils import RDKitToolkitWrapper
 from openff.units import unit
 
-from openff.fragmenter._xtb import OptimizationLevel, XTBError, compute_wiberg_bond_orders
+from openff.fragmenter._xtb import (
+    OptimizationLevel,
+    XTBBondingChangedError,
+    XTBError,
+    compute_wiberg_bond_orders,
+)
 from openff.fragmenter.utils import get_atom_index, get_map_index
 
 logger = logging.getLogger(__name__)
@@ -19,7 +24,7 @@ def assign_elf10_xtb_bond_orders(
     molecule: Molecule,
     max_confs: int = 800,
     rms_threshold: float = 1.0,
-    solvent: str | None = None,
+    solvent: str | None = "water",
     optimization_level: OptimizationLevel | None = "normal",
 ) -> Molecule:
     """Generate ELF10 GFN2-xTB Wiberg bond orders (WBOs) for a molecule.
@@ -39,12 +44,18 @@ def assign_elf10_xtb_bond_orders(
         The minimum RMS value [Angstrom] at which two conformers are considered redundant
         and one is deleted.
     solvent
-        The name of an ALPB implicit solvent known to ``xtb`` (e.g. ``'water'``) to
-        compute the WBOs in, or ``None`` to compute them in the gas phase.
+        The name of an ALPB implicit solvent known to ``xtb`` to compute the WBOs in,
+        or ``None`` to compute them in the gas phase. See ``WBOOptions.solvent`` for
+        why water is the default.
     optimization_level
         The ``xtb --opt`` convergence level to optimize each ELF10 conformer at
         before its WBOs are taken, or ``None`` to compute the WBOs for the
         unminimized RDKit conformers.
+
+    Raises
+    ------
+    XTBBondingChangedError
+        If optimizing a conformer changes the molecule's bonding.
 
     Returns
     -------
@@ -94,12 +105,13 @@ def assign_elf10_xtb_bond_orders(
         )
 
         # xtb only lists pairs above a small cutoff (~0.1), which every real bond in
-        # a closed-shell molecule clears. A missing bond means the calculation went
-        # wrong, so treat it as a failure rather than as a zero bond order.
+        # a closed-shell molecule clears. A missing bond is never a zero bond order:
+        # after an optimization it means the bonding changed, and otherwise that the
+        # calculation went wrong.
         missing = [key for key in bond_keys if key not in bond_orders]
 
         if missing:
-            raise XTBError(f"xtb reported no Wiberg bond order for bonds {missing} of {molecule.to_smiles()}.")
+            _raise_missing_bond_orders(molecule, missing, solvent, optimization_level)
 
         per_conformer_bond_orders.append([bond_orders[key] for key in bond_keys])
 
@@ -113,6 +125,38 @@ def assign_elf10_xtb_bond_orders(
         molecule.properties["atom_map"] = atom_map
 
     return molecule
+
+
+def _raise_missing_bond_orders(
+    molecule: Molecule,
+    missing: list[tuple[int, int]],
+    solvent: str | None,
+    optimization_level: OptimizationLevel | None,
+):
+    """Raises the error for bonds of ``molecule`` that xtb reported no WBO for."""
+
+    bonds = ", ".join(f"{molecule.atoms[i].symbol}{i}-{molecule.atoms[j].symbol}{j}" for i, j in missing)
+    smiles = molecule.to_smiles(explicit_hydrogens=False)
+
+    if optimization_level is None:
+        raise XTBError(f"xtb reported no Wiberg bond order for the {bonds} bond(s) (atom indices) of {smiles}.")
+
+    if solvent is None:
+        where = "in the gas phase"
+        cause = "a proton moving between charged groups, as zwitterions do in the gas phase"
+        remedy = (
+            "Compute the WBOs in an implicit solvent (WBOOptions(solvent='water'), the default) or without "
+            "optimizing (WBOOptions(optimize=False))."
+        )
+    else:
+        where = f"in {solvent}"
+        cause = "a proton moving between charged groups"
+        remedy = "Compute the WBOs without optimizing (WBOOptions(optimize=False))."
+
+    raise XTBBondingChangedError(
+        f"Optimizing {smiles} with GFN2-xTB {where} changed its bonding: xtb reports no bond order for its "
+        f"{bonds} bond(s) (atom indices) at the optimized geometry. This is usually {cause}. {remedy}"
+    )
 
 
 def _generate_conformers(molecule: Molecule, max_confs: int = 800, rms_threshold: float = 1.0) -> Molecule:

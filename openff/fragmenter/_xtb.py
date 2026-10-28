@@ -39,6 +39,16 @@ class XTBError(RuntimeError):
     """Raised when an ``xtb`` calculation fails or its output cannot be read."""
 
 
+class XTBBondingChangedError(Exception):
+    """Raised when optimizing a molecule with ``xtb`` changes its bonding, for example
+    when a zwitterion transfers a proton between its charged groups in the gas phase.
+
+    Like ``XTBNotFoundError`` this is not a ``RuntimeError``. Fragment growth would
+    otherwise treat it as "keep growing", and silently grow such fragments to nearly
+    the whole parent rather than report that the WBO settings do not suit the molecule.
+    """
+
+
 def find_xtb() -> str:
     """Returns the path to the ``xtb`` executable, raising ``XTBNotFoundError`` if it
     is not on the ``PATH``."""

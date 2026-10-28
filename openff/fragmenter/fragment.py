@@ -882,9 +882,12 @@ class WBOOptions(BaseModel):
     )
 
     solvent: str | None = Field(
-        None,
-        description="The ALPB implicit solvent (any name ``xtb --alpb`` accepts, e.g. "
-        "``'water'``) to compute the WBOs in. If ``None`` the WBOs are computed in the gas phase.",
+        "water",
+        description="The ALPB implicit solvent (any name ``xtb --alpb`` accepts) to compute the WBOs in, "
+        "or ``None`` to compute them in the gas phase. Water is the default because optimizing in the gas "
+        "phase can change a molecule's bonding: zwitterions transfer a proton between their charged groups, "
+        "and other ions can react intramolecularly. Water avoids this, and was not slower on the molecules we "
+        "tested.",
     )
 
     optimize: bool = Field(
@@ -1058,10 +1061,14 @@ class WBOFragmenter(Fragmenter):
         try:
             fragment = assign_elf10_xtb_bond_orders(fragment, **kwargs)
 
-        except RuntimeError:
+        except RuntimeError as error:
             # Most of the time it fails because it is either missing parameters or a
-            # functional group that should not be fragmented was fragmented
-            logger.warning(f"Cannot calculate WBO for fragment {fragment.to_smiles()}. Continue growing fragment")
+            # functional group that should not be fragmented was fragmented. Errors that
+            # growing cannot fix, such as a missing xtb or an optimization that changes
+            # the fragment's bonding, are deliberately not RuntimeErrors and propagate.
+            logger.warning(
+                f"Cannot calculate WBO for fragment {fragment.to_smiles()}, so continuing to grow it: {error}"
+            )
 
             # TODO: handle different kinds of failures instead of just continuing to
             #      grow until the failure goes away. Some fail because there are

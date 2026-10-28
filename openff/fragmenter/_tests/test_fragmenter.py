@@ -23,7 +23,7 @@ from openff.fragmenter._tests.utils import (
     smarts_set_to_map_indices,
     value_smarts_to_map_indices,
 )
-from openff.fragmenter._xtb import XTBNotFoundError
+from openff.fragmenter._xtb import XTBBondingChangedError, XTBError, XTBNotFoundError
 from openff.fragmenter.chemi import assign_elf10_xtb_bond_orders, smiles_to_molecule
 from openff.fragmenter.fragment import (
     FragmentationResult,
@@ -443,16 +443,21 @@ def test_wbo_options_passed_to_fragments(monkeypatch):
 
     engine = WBOFragmenter(
         wbo_options=WBOOptions(
-            max_conformers=7, rms_threshold=0.5, solvent="water", optimize=True, optimization_level="loose"
+            max_conformers=7, rms_threshold=0.5, solvent=None, optimize=True, optimization_level="loose"
         )
     )
     engine.fragment(Molecule.from_smiles("CCCCC"))
 
-    expected = {"max_confs": 7, "rms_threshold": 0.5, "solvent": "water", "optimization_level": "loose"}
+    expected = {"max_confs": 7, "rms_threshold": 0.5, "solvent": None, "optimization_level": "loose"}
 
     # One call for the parent plus at least one per fragment.
     assert len(calls) >= 3
     assert all(call == expected for call in calls)
+
+
+def test_wbo_options_default_solvent():
+    assert WBOOptions()._bond_order_kwargs()["solvent"] == "water"
+    assert WBOOptions(solvent=None)._bond_order_kwargs()["solvent"] is None
 
 
 def test_wbo_options_optimization():
@@ -471,6 +476,52 @@ def test_wbo_fragment_missing_xtb(monkeypatch):
 
     with pytest.raises(XTBNotFoundError):
         WBOFragmenter().fragment(Molecule.from_smiles("CCCCC"))
+
+
+def _fail_fragment_wbos(error: Exception):
+    """Returns a stand-in for ``assign_elf10_xtb_bond_orders`` which succeeds for the
+    parent, its first call, and raises ``error`` for every fragment."""
+
+    calls = []
+
+    def mock_assign(molecule, **kwargs):
+        calls.append(molecule)
+
+        if len(calls) > 1:
+            raise error
+
+        molecule = copy.deepcopy(molecule)
+
+        for bond in molecule.bonds:
+            bond.fractional_bond_order = 1.0
+
+        return molecule
+
+    return mock_assign
+
+
+def test_wbo_fragment_bonding_changed(monkeypatch):
+    """A fragment whose bonding changes when it is optimized must stop fragmentation,
+    rather than be grown, possibly to nearly the whole parent, until it stops changing."""
+
+    monkeypatch.setattr(fragment, "assign_elf10_xtb_bond_orders", _fail_fragment_wbos(XTBBondingChangedError("moved")))
+
+    assert not issubclass(XTBBondingChangedError, RuntimeError)
+
+    with pytest.raises(XTBBondingChangedError, match="moved"):
+        WBOFragmenter().fragment(Molecule.from_smiles("CCCCC"))
+
+
+def test_wbo_fragment_failure_logged(monkeypatch, caplog):
+    """Other xtb failures grow the fragment, and the log says what went wrong."""
+
+    monkeypatch.setattr(fragment, "assign_elf10_xtb_bond_orders", _fail_fragment_wbos(XTBError("xtb fell over")))
+
+    with caplog.at_level(logging.WARNING):
+        result = WBOFragmenter().fragment(Molecule.from_smiles("CCCCC"))
+
+    assert len(result.fragments) > 0
+    assert "so continuing to grow it: xtb fell over" in caplog.text
 
 
 def test_keep_track_of_map():
