@@ -91,6 +91,12 @@ def test_assign_elf10_xtb_bond_orders_bad_solvent():
         assign_elf10_xtb_bond_orders(Molecule.from_smiles("C"), max_confs=1, solvent="not-a-solvent")
 
 
+@pytest.mark.parametrize("smiles", ["OB(O)c1ccccc1", "C[Se]C"])
+def test_assign_elf10_xtb_bond_orders_no_mmff94_parameters(smiles):
+    with pytest.raises(ValueError, match="MMFF94 has no parameters"):
+        assign_elf10_xtb_bond_orders(Molecule.from_smiles(smiles), max_confs=1)
+
+
 def test_assign_elf10_xtb_bond_orders_open_shell():
     # A methyl radical: built by hand as SMILES parsing would add a fourth H.
     molecule = Molecule()

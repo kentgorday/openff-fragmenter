@@ -51,6 +51,8 @@ def assign_elf10_xtb_bond_orders(
         A new molecule which contains ELF10 GFN2-xTB Wiberg bond orders.
     """
 
+    from rdkit.Chem.rdForceFieldHelpers import MMFFHasAllMoleculeParams
+
     molecule = copy.deepcopy(molecule)
 
     # Store the atom map separately in case it gets removed by a TK.
@@ -65,7 +67,15 @@ def assign_elf10_xtb_bond_orders(
         )
 
     # Generate a set of ELF10 conformers. The RDKit implementation of ELF ranks the
-    # conformers using MMFF94 charges, so no semi-empirical charges are needed.
+    # conformers using MMFF94 charges, so no semi-empirical charges are needed, but
+    # MMFF94 must have parameters for every atom. Check that here, as the toolkit
+    # otherwise fails with an unhelpful AttributeError.
+    if not MMFFHasAllMoleculeParams(molecule.to_rdkit()):
+        raise ValueError(
+            f"{molecule.to_smiles()} contains atoms that MMFF94 has no parameters for (e.g. boron or selenium). "
+            "MMFF94 charges are needed to select the ELF10 conformers, so its WBOs cannot be computed."
+        )
+
     molecule = _generate_conformers(molecule, max_confs, rms_threshold)
     molecule.apply_elf_conformer_selection(toolkit_registry=RDKitToolkitWrapper())
 
